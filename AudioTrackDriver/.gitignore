@@ -1,0 +1,9 @@
+packages/
+**/x64/
+**/Release/
+**/Debug/
+*.obj
+*.pdb
+*.sys
+*.cat
+*.log

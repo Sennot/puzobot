@@ -1,0 +1,34 @@
+name: Build mod (AudioTrack)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["**"]
+    paths: ["AudioTrack/**", ".github/workflows/mod.yml"]
+  pull_request:
+    paths: ["AudioTrack/**", ".github/workflows/mod.yml"]
+
+jobs:
+  build:
+    name: Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: geode-sdk/build-geode-mod@main
+        with:
+          path: AudioTrack
+          build-config: RelWithDebInfo
+          export-pdb: false
+          combine: true
+
+  package:
+    name: Package .geode
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: geode-sdk/build-geode-mod/combine@main
+        id: build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xdbot-audiotrack-geode
+          path: ${{ steps.build.outputs.build-output }}

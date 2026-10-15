@@ -1,0 +1,10 @@
+# Third-party binaries that are not part of this project
+*.geode
+*.dll
+*.so
+*.dylib
+*.sys
+*.cat
+build*/
+.cache/
+__pycache__/

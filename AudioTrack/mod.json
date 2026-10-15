@@ -1,0 +1,29 @@
+{
+	"geode": "5.10.0",
+	"gd": {
+		"win": "2.2081"
+	},
+	"id": "sol.xdbot-audiotrack",
+	"name": "xdBot Audiotrack",
+	"version": "v0.1.0",
+	"developer": "sol project",
+	"description": "Adds an Audiotrack section to the xdBot menu: align a .wav (clicks) to the macro's first input and play it with the macro.",
+	"tags": ["utility", "gameplay"],
+	"dependencies": {
+		"zilko.xdbot": ">=v2.7.7"
+	},
+	"settings": {
+		"mic-device": {
+			"name": "Microphone",
+			"description": "Part of the real microphone's name to pass through the Audiotrack Mic cable. Empty = the default microphone.",
+			"type": "string",
+			"default": ""
+		},
+		"start-mixer": {
+			"name": "Start the mixer with the game",
+			"description": "Starts the mixer when the game launches (if the Audiotrack driver is installed), so Audiotrack Mic carries your voice as long as GD is open.",
+			"type": "bool",
+			"default": true
+		}
+	}
+}

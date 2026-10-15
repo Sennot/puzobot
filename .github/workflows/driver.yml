@@ -1,0 +1,46 @@
+name: Build driver (AudioTrackDriver)
+
+# Builds the unsigned kernel driver (audiotrackmic.sys + inf). The package is NOT
+# signed here: for other people it has to go through Microsoft attestation signing
+# (EV certificate + Partner Center). For development use a VM with test signing.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["**"]
+    paths: ["AudioTrackDriver/**", ".github/workflows/driver.yml"]
+  pull_request:
+    paths: ["AudioTrackDriver/**", ".github/workflows/driver.yml"]
+
+defaults:
+  run:
+    working-directory: AudioTrackDriver
+
+jobs:
+  build:
+    name: Driver (x64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: microsoft/setup-msbuild@v2
+
+      - name: Restore WDK / SDK NuGet packages
+        shell: pwsh
+        run: nuget restore packages.config -PackagesDirectory packages
+
+      - name: Build
+        shell: pwsh
+        run: msbuild sysvad/AudioTrackDriver.sln /m /restore:false /p:Configuration=Release /p:Platform=x64 /v:minimal
+
+      - name: Collect output
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force out | Out-Null
+          Get-ChildItem sysvad/TabletAudioSample -Recurse -Include audiotrackmic.sys,AudioTrackMic.inf,audiotrackmic.cat,audiotrackmic.pdb |
+            ForEach-Object { Copy-Item $_.FullName out/ -Force; Write-Host $_.FullName }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: audiotrack-driver-unsigned
+          path: AudioTrackDriver/out
