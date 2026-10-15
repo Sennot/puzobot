@@ -29,6 +29,29 @@ jobs:
         shell: pwsh
         run: nuget restore packages.config -PackagesDirectory packages
 
+      # The NuGet WDK has the compiler and libraries but not the INF tools (stampinf, inf2cat).
+      # Use them from an installed Windows Kit, installing the WDK first when the runner has none.
+      - name: Locate INF tools (install the WDK if needed)
+        shell: pwsh
+        run: |
+          function Find-Tool([string]$name) {
+            Get-ChildItem -Path "${env:ProgramFiles(x86)}\Windows Kits", (Join-Path $PWD 'packages') -Recurse -Filter $name -ErrorAction SilentlyContinue |
+              Where-Object { $_.FullName -match '\\(x64|x86)\\' } | Sort-Object FullName -Descending | Select-Object -First 1
+          }
+          if (-not (Find-Tool 'stampinf.exe')) {
+            Write-Host 'stampinf.exe not found, installing the WDK...'
+            winget install --id Microsoft.WindowsWDK.10.0.26100 --silent --accept-source-agreements --accept-package-agreements
+          }
+          foreach ($tool in 'stampinf.exe', 'inf2cat.exe', 'infverif.exe') {
+            $found = Find-Tool $tool
+            if ($found) {
+              Write-Host "$tool -> $($found.FullName)"
+              Add-Content -Path $env:GITHUB_PATH -Value $found.DirectoryName
+            } else {
+              Write-Host "$tool NOT FOUND"
+            }
+          }
+
       - name: Build
         shell: pwsh
         run: msbuild sysvad/AudioTrackDriver.sln /m /restore:false /p:Configuration=Release /p:Platform=x64 /v:minimal
