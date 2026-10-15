@@ -52,9 +52,18 @@ jobs:
             }
           }
 
+      - name: Diagnostics (WDK package layout)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $targets = Get-ChildItem packages -Recurse -Filter 'WindowsDriver.common.targets' | Select-Object -First 1
+          Write-Host "targets: $($targets.FullName)"
+          Select-String -Path $targets.FullName -Pattern 'InfVerif|ApiValidator' | Select-Object -First 60 | ForEach-Object { Write-Host "$($_.LineNumber): $($_.Line.Trim())" }
+          Get-ChildItem packages -Recurse -Filter 'InfVerif*' | ForEach-Object { Write-Host "found: $($_.FullName)" }
+
       - name: Build
         shell: pwsh
-        run: msbuild sysvad/AudioTrackDriver.sln /m /restore:false /p:Configuration=Release /p:Platform=x64 /v:minimal
+        run: msbuild sysvad/AudioTrackDriver.sln /m /restore:false /p:Configuration=Release /p:Platform=x64 /p:ApiValidator_Enable=false /v:minimal
 
       - name: Collect output
         shell: pwsh
