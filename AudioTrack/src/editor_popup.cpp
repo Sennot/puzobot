@@ -497,8 +497,7 @@ void AudiotrackPopup::onLocal(CCObject*) {
 void AudiotrackPopup::onInstall(CCObject*) {
     // VB-Cable is a third-party driver with its own installer: open its page instead of bundling it.
     createQuickPopup("Virtual cable",
-                     "The microphone cable uses <cy>VB-Cable</c> (free for personal use). Open its download page?
-"
+                     "The microphone cable uses <cy>VB-Cable</c> (free for personal use). Open its download page?\n"
                      "After installing, set <cg>CABLE Input</c> to <cg>48000 Hz</c> in Windows sound settings for the "
                      "lowest delay and pick <cg>CABLE Output</c> as the microphone in OBS / Discord.",
                      "Cancel", "Open page", [](FLAlertLayer*, bool open) {
