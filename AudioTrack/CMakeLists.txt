@@ -29,4 +29,4 @@ add_subdirectory($ENV{GEODE_SDK} ${CMAKE_CURRENT_BINARY_DIR}/geode)
 setup_geode_mod(${PROJECT_NAME} EXTERNALS "zilko.xdbot:2.7.7")
 
 # WASAPI (mixer), SetupAPI-free: the installer only starts PowerShell through ShellExecute.
-target_link_libraries(${PROJECT_NAME} ole32 shell32 propsys)
+target_link_libraries(${PROJECT_NAME} ole32 shell32 propsys avrt)

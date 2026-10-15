@@ -6,6 +6,7 @@
 
 #include <Windows.h>
 #include <audioclient.h>
+#include <avrt.h>
 #include <mmdeviceapi.h>
 #include <wrl/client.h>
 
@@ -58,8 +59,15 @@ std::string friendlyName(IMMDevice* device) {
     return name;
 }
 
+// The virtual cable devices (VB-Cable and our own driver): never a real microphone,
+// reading them as the microphone would feed the output back into itself.
+bool isVirtualName(std::string const& lowerName) {
+    return lowerName.find("audiotrack") != std::string::npos || lowerName.find("vb-audio") != std::string::npos ||
+           lowerName.find("cable output") != std::string::npos || lowerName.find("cable input") != std::string::npos;
+}
+
 // First active endpoint whose friendly name contains `needle` (case-insensitive).
-// With `skipAudiotrack` the Audiotrack devices themselves are never returned.
+// With `skipAudiotrack` the virtual cable devices themselves are never returned.
 ComPtr<IMMDevice> findDevice(IMMDeviceEnumerator* enumerator, EDataFlow flow, std::string const& needle,
                              bool skipAudiotrack) {
     ComPtr<IMMDeviceCollection> devices;
@@ -71,8 +79,7 @@ ComPtr<IMMDevice> findDevice(IMMDeviceEnumerator* enumerator, EDataFlow flow, st
         ComPtr<IMMDevice> device;
         if (FAILED(devices->Item(i, &device))) continue;
         auto const name = lower(friendlyName(device.Get()));
-        bool const isAudiotrack = name.find("audiotrack") != std::string::npos;
-        if (skipAudiotrack && isAudiotrack) continue;
+        if (skipAudiotrack && isVirtualName(name)) continue;
         if (!wanted.empty() && name.find(wanted) == std::string::npos) continue;
         return device;
     }
@@ -90,9 +97,39 @@ WAVEFORMATEX floatStereoFormat() {
     return format;
 }
 
-// Opens `device` for shared-mode, event-driven streaming in 48 kHz stereo float
-// (Windows converts to and from the device format).
-bool openClient(IMMDevice* device, ComPtr<IAudioClient>& client, HANDLE event) {
+// Low-latency shared mode (Windows 10+): when the device's engine format already is
+// 48 kHz stereo float, ask the engine for its smallest period (a few ms instead of 10+).
+bool openLowLatency(IMMDevice* device, ComPtr<IAudioClient>& client, HANDLE event, char const* what) {
+    ComPtr<IAudioClient3> client3;
+    if (FAILED(device->Activate(__uuidof(IAudioClient3), CLSCTX_ALL, nullptr,
+                                reinterpret_cast<void**>(client3.GetAddressOf()))))
+        return false;
+    WAVEFORMATEX* mix = nullptr;
+    if (FAILED(client3->GetMixFormat(&mix)) || !mix) return false;
+
+    bool const floatFormat =
+        mix->wBitsPerSample == 32 &&
+        (mix->wFormatTag == WAVE_FORMAT_IEEE_FLOAT ||
+         (mix->wFormatTag == WAVE_FORMAT_EXTENSIBLE &&
+          reinterpret_cast<WAVEFORMATEXTENSIBLE*>(mix)->SubFormat.Data1 == WAVE_FORMAT_IEEE_FLOAT));
+    UINT32 defaultPeriod = 0, fundamental = 0, minPeriod = 0, maxPeriod = 0;
+    bool ok = floatFormat && mix->nChannels == 2 && mix->nSamplesPerSec == kRate &&
+              SUCCEEDED(client3->GetSharedModeEnginePeriod(mix, &defaultPeriod, &fundamental, &minPeriod, &maxPeriod)) &&
+              SUCCEEDED(client3->InitializeSharedAudioStream(AUDCLNT_STREAMFLAGS_EVENTCALLBACK, minPeriod, mix, nullptr)) &&
+              SUCCEEDED(client3->SetEventHandle(event));
+    if (!ok) log::info("Audiotrack mixer: {} is not in low-latency form (engine format {} Hz, {} ch, {} bit)", what,
+                       mix->nSamplesPerSec, mix->nChannels, mix->wBitsPerSample);
+    else log::info("Audiotrack mixer: {} runs with a {:.1f} ms period", what, minPeriod * 1000.0 / kRate);
+    CoTaskMemFree(mix);
+    if (!ok) return false;
+    return SUCCEEDED(client3.As(&client));
+}
+
+// Opens `device` for shared-mode, event-driven streaming in 48 kHz stereo float. The low-latency
+// path is tried first; otherwise Windows converts to and from the device format.
+bool openClient(IMMDevice* device, ComPtr<IAudioClient>& client, HANDLE event, char const* what) {
+    if (openLowLatency(device, client, event, what)) return true;
+    client.Reset();
     if (FAILED(device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, reinterpret_cast<void**>(client.GetAddressOf()))))
         return false;
     auto format = floatStereoFormat();
@@ -117,14 +154,33 @@ Mixer::~Mixer() {
     if (m_capture.joinable()) m_capture.detach();
 }
 
-bool Mixer::driverInstalled() {
+// The playback device the mixer writes to: the cable's input (VB-Cable's "CABLE Input"),
+// or Audiotrack's own driver when that is what is installed.
+static ComPtr<IMMDevice> findCableOutput(IMMDeviceEnumerator* enumerator, std::string const& name) {
+    ComPtr<IMMDevice> device;
+    if (!name.empty()) device = findDevice(enumerator, eRender, name, false);
+    if (!device) device = findDevice(enumerator, eRender, "cable input", false);
+    if (!device) device = findDevice(enumerator, eRender, "audiotrack out", false);
+    return device;
+}
+
+bool Mixer::cableAvailable() const {
     ComScope com;
     if (FAILED(com.hr) && com.hr != RPC_E_CHANGED_MODE) return false;
     ComPtr<IMMDeviceEnumerator> enumerator;
     if (FAILED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&enumerator))))
         return false;
-    return findDevice(enumerator.Get(), eRender, "audiotrack out", false) &&
-           findDevice(enumerator.Get(), eCapture, "audiotrack mic", false);
+    return findCableOutput(enumerator.Get(), cableName()) != nullptr;
+}
+
+void Mixer::setCableName(std::string name) {
+    std::lock_guard lock(m_mutex);
+    m_cableName = std::move(name);
+}
+
+std::string Mixer::cableName() const {
+    std::lock_guard lock(m_mutex);
+    return m_cableName;
 }
 
 std::string Mixer::status() const {
@@ -147,8 +203,8 @@ bool Mixer::start() {
     if (m_render.joinable()) m_render.join(); // a previous run ended on its own
     if (m_capture.joinable()) m_capture.join();
 
-    if (!driverInstalled()) {
-        setStatus("Audiotrack driver is not installed");
+    if (!cableAvailable()) {
+        setStatus("virtual cable not found (install VB-Cable)");
         return false;
     }
     std::string micName;
@@ -233,6 +289,14 @@ void Mixer::setTransport(bool paused, float rate) {
 
 void Mixer::captureThread(std::string micName) {
     ComScope com;
+    DWORD mmTask = 0;
+    HANDLE const mmcss = AvSetMmThreadCharacteristicsW(L"Pro Audio", &mmTask); // steady scheduling for audio
+    struct MmcssGuard {
+        HANDLE handle;
+        ~MmcssGuard() {
+            if (handle) AvRevertMmThreadCharacteristics(handle);
+        }
+    } mmcssGuard{mmcss};
     ComPtr<IMMDeviceEnumerator> enumerator;
     if (FAILED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&enumerator)))) return;
 
@@ -240,8 +304,8 @@ void Mixer::captureThread(std::string micName) {
     if (!micName.empty()) device = findDevice(enumerator.Get(), eCapture, micName, true);
     if (!device) {
         enumerator->GetDefaultAudioEndpoint(eCapture, eConsole, &device);
-        // The default must not be our own cable, that would feed the output back into itself.
-        if (device && lower(friendlyName(device.Get())).find("audiotrack") != std::string::npos)
+        // The default must not be a virtual cable, that would feed the output back into itself.
+        if (device && isVirtualName(lower(friendlyName(device.Get()))))
             device = findDevice(enumerator.Get(), eCapture, "", true);
     }
     if (!device) {
@@ -253,7 +317,7 @@ void Mixer::captureThread(std::string micName) {
     HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     ComPtr<IAudioClient> client;
     ComPtr<IAudioCaptureClient> capture;
-    if (!openClient(device.Get(), client, event) ||
+    if (!openClient(device.Get(), client, event, "the microphone") ||
         FAILED(client->GetService(IID_PPV_ARGS(&capture))) || FAILED(client->Start())) {
         log::warn("Audiotrack mixer: cannot open the microphone");
         CloseHandle(event);
@@ -343,6 +407,14 @@ void Mixer::mixInto(float* out, std::uint32_t frames) {
 
 void Mixer::renderThread() {
     ComScope com;
+    DWORD mmTask = 0;
+    HANDLE const mmcss = AvSetMmThreadCharacteristicsW(L"Pro Audio", &mmTask);
+    struct MmcssGuard {
+        HANDLE handle;
+        ~MmcssGuard() {
+            if (handle) AvRevertMmThreadCharacteristics(handle);
+        }
+    } mmcssGuard{mmcss};
     ComPtr<IMMDeviceEnumerator> enumerator;
     ComPtr<IMMDevice> device;
     HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
@@ -351,9 +423,10 @@ void Mixer::renderThread() {
     UINT32 bufferFrames = 0;
 
     bool ok = SUCCEEDED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&enumerator)));
-    if (ok) device = findDevice(enumerator.Get(), eRender, "audiotrack out", false);
-    ok = ok && device && openClient(device.Get(), client, event) && SUCCEEDED(client->GetBufferSize(&bufferFrames)) &&
-         SUCCEEDED(client->GetService(IID_PPV_ARGS(&render)));
+    if (ok) device = findCableOutput(enumerator.Get(), cableName());
+    ok = ok && device && openClient(device.Get(), client, event, "the cable output") &&
+         SUCCEEDED(client->GetBufferSize(&bufferFrames)) && SUCCEEDED(client->GetService(IID_PPV_ARGS(&render)));
+    if (ok) log::info("Audiotrack mixer: output is '{}', buffer {} frames", friendlyName(device.Get()), bufferFrames);
     if (ok) {
         // Start with a buffer of silence.
         BYTE* data = nullptr;
@@ -361,8 +434,8 @@ void Mixer::renderThread() {
         ok = SUCCEEDED(client->Start());
     }
     if (!ok) {
-        setStatus("cannot open \"Audiotrack Out\"");
-        log::error("Audiotrack mixer: cannot open the Audiotrack Out render endpoint");
+        setStatus("cannot open the virtual cable");
+        log::error("Audiotrack mixer: cannot open the virtual cable's playback device");
         CloseHandle(event);
         m_running = false;
         return;

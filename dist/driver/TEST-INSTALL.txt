@@ -1,0 +1,12 @@
+TEST-SIGNED Audiotrack driver - only for a virtual machine, never for your main PC.
+
+1. Run an elevated PowerShell on the VM:
+     bcdedit /set testsigning on        (then restart; Secure Boot must be off)
+2. Trust the test certificate (elevated):
+     certutil -addstore Root AudiotrackTest.cer
+     certutil -addstore TrustedPublisher AudiotrackTest.cer
+3. Install (elevated), from this folder:
+     powershell -ExecutionPolicy Bypass -File install.ps1 -DriverDir .
+4. Check Sound settings: "Audiotrack Out" (playback) and "Audiotrack Mic" (recording).
+   Play any sound to Audiotrack Out - it appears on Audiotrack Mic.
+Remove with uninstall.ps1.

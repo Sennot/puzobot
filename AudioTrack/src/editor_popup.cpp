@@ -151,14 +151,14 @@ bool AudiotrackPopup::init() {
     button(m_buttonMenu, this, menu_selector(AudiotrackPopup::onSave), "Save", 420.f, 46.f, 70.f, {29, 135, 123});
 
     // Microphone cable row.
-    m_driverPresent = Mixer::driverInstalled();
+    m_driverPresent = Mixer::get().cableAvailable();
     button(m_buttonMenu, this, menu_selector(AudiotrackPopup::onToMic), "", 70.f, 20.f, 108.f, {49, 79, 103});
     m_toMicLabel = label(m_mainLayer, "", 70.f, 20.f, .3f, kMuted, 100.f);
     m_toMicLabel->setZOrder(5);
     button(m_buttonMenu, this, menu_selector(AudiotrackPopup::onLocal), "", 188.f, 20.f, 108.f, {49, 79, 103});
     m_localLabel = label(m_mainLayer, "", 188.f, 20.f, .3f, kMuted, 100.f);
     m_localLabel->setZOrder(5);
-    button(m_buttonMenu, this, menu_selector(AudiotrackPopup::onInstall), "Install driver", 306.f, 20.f, 100.f,
+    button(m_buttonMenu, this, menu_selector(AudiotrackPopup::onInstall), "Get VB-Cable", 306.f, 20.f, 100.f,
            {40, 50, 74});
     m_mixerLabel = label(m_mainLayer, "", 446.f, 20.f, .26f, kMuted, 84.f);
     m_mixerLabel->setAnchorPoint({1.f, .5f});
@@ -289,7 +289,7 @@ void AudiotrackPopup::refreshAll() {
     m_toMicLabel->setColor(m_track.toMic ? kLight : kMuted);
     m_localLabel->setString(m_track.local ? "In game: ON" : "In game: OFF");
     m_localLabel->setColor(m_track.local ? kLight : kMuted);
-    std::string mixer = "driver not installed";
+    std::string mixer = "VB-Cable not found";
     if (Mixer::get().running()) mixer = "mixer running";
     else if (m_driverPresent) mixer = Mixer::get().status();
     m_mixerLabel->setString(mixer.c_str());
@@ -477,10 +477,10 @@ void AudiotrackPopup::onEnabled(CCObject*) {
 void AudiotrackPopup::onToMic(CCObject*) {
     if (!m_track.toMic) {
         // Turning it on needs the cable: start the mixer now so a problem shows up here.
-        m_driverPresent = Mixer::driverInstalled();
+        m_driverPresent = Mixer::get().cableAvailable();
         if (!Mixer::get().running() && !Mixer::get().start()) {
             setStatus(m_driverPresent ? "The mixer could not start: " + Mixer::get().status()
-                                      : "Install the Audiotrack driver first (button below)",
+                                      : "Install VB-Cable first (Get VB-Cable button)",
                       true);
             return refreshAll();
         }
@@ -495,17 +495,14 @@ void AudiotrackPopup::onLocal(CCObject*) {
 }
 
 void AudiotrackPopup::onInstall(CCObject*) {
-    createQuickPopup("Audiotrack driver",
-                     "Install the <cy>Audiotrack virtual audio driver</c>?\nIt adds the devices <cg>Audiotrack Out</c> "
-                     "and <cg>Audiotrack Mic</c>. Windows will ask for administrator permission.",
-                     "Cancel", "Install", [](FLAlertLayer*, bool install) {
-                         if (!install) return;
-                         std::string error;
-                         if (!runDriverScript(true, error))
-                             Notification::create("Audiotrack driver: " + error, NotificationIcon::Error, 5.f)->show();
-                         else
-                             Notification::create("Installing the Audiotrack driver...", NotificationIcon::Loading, 3.f)
-                                 ->show();
+    // VB-Cable is a third-party driver with its own installer: open its page instead of bundling it.
+    createQuickPopup("Virtual cable",
+                     "The microphone cable uses <cy>VB-Cable</c> (free for personal use). Open its download page?
+"
+                     "After installing, set <cg>CABLE Input</c> to <cg>48000 Hz</c> in Windows sound settings for the "
+                     "lowest delay and pick <cg>CABLE Output</c> as the microphone in OBS / Discord.",
+                     "Cancel", "Open page", [](FLAlertLayer*, bool open) {
+                         if (open) utils::web::openLinkInBrowser("https://vb-audio.com/Cable/");
                      });
 }
 

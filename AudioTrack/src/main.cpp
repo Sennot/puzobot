@@ -48,5 +48,6 @@ $on_mod(Loaded) {
 
     auto* mod = Mod::get();
     at::Mixer::get().setMicName(mod->getSettingValue<std::string>("mic-device"));
+    at::Mixer::get().setCableName(mod->getSettingValue<std::string>("cable-device"));
     if (mod->getSettingValue<bool>("start-mixer")) at::Mixer::get().start();
 }

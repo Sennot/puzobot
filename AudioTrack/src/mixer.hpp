@@ -1,9 +1,9 @@
 #pragma once
 
 // The Audiotrack mixer: reads the real microphone, mixes the click wave into
-// it and plays the result to the "Audiotrack Out" endpoint of the Audiotrack
-// driver, which loops it back into the "Audiotrack Mic" capture device. Apps
-// (OBS, Discord, ShadowPlay) then use "Audiotrack Mic" as their microphone.
+// it and plays the result to the playback device of a virtual cable (VB-Cable's
+// "CABLE Input"), which loops it back into the cable's capture device. Apps
+// (OBS, Discord, ShadowPlay) then use that capture device as their microphone.
 //
 //   real mic --WASAPI capture--> ring --+
 //                                       +--> mix --WASAPI render--> Audiotrack Out
@@ -36,8 +36,11 @@ public:
     bool running() const { return m_running.load(); }
     std::string status() const;
 
-    // True when both "Audiotrack Out" and "Audiotrack Mic" exist (driver installed).
-    static bool driverInstalled();
+    // True when a virtual cable's playback device exists: VB-Cable's "CABLE Input"
+    // (or whatever setCableName() says), or Audiotrack's own driver.
+    bool cableAvailable() const;
+    // Part of the cable's playback device name. Default "CABLE Input". Takes effect on the next start().
+    void setCableName(std::string name);
 
     // Name (substring) of the real microphone to pass through. Empty = the
     // default capture device. Takes effect on the next start().
@@ -67,6 +70,7 @@ private:
         float volume = 1.f;
     };
 
+    std::string cableName() const;
     void captureThread(std::string micName);
     void renderThread();
     void mixInto(float* out, std::uint32_t frames);
@@ -82,6 +86,7 @@ private:
     std::thread m_capture;
     std::thread m_render;
     std::string m_micName;
+    std::string m_cableName = "CABLE Input";
 
     mutable std::mutex m_mutex; // guards voices, clip cache and status
     std::vector<Voice> m_voices;
