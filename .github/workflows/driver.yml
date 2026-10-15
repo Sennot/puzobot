@@ -1,16 +1,16 @@
 name: Build driver (AudioTrackDriver)
 
-# Builds the unsigned kernel driver (audiotrackmic.sys + inf). The package is NOT
-# signed here: for other people it has to go through Microsoft attestation signing
-# (EV certificate + Partner Center). For development use a VM with test signing.
+# Builds the kernel driver (audiotrackmic.sys + inf) and makes a TEST-signed package
+# for a test-signing VM. It is NOT valid for other people's machines: that needs
+# Microsoft attestation signing (EV certificate + Partner Center).
 
 on:
   workflow_dispatch:
   push:
     branches: ["**"]
-    paths: ["AudioTrackDriver/**", ".github/workflows/driver.yml"]
+    paths: ["AudioTrackDriver/**", "AudioTrack/resources/driver/**", ".github/workflows/driver.yml"]
   pull_request:
-    paths: ["AudioTrackDriver/**", ".github/workflows/driver.yml"]
+    paths: ["AudioTrackDriver/**", "AudioTrack/resources/driver/**", ".github/workflows/driver.yml"]
 
 defaults:
   run:
@@ -29,20 +29,15 @@ jobs:
         shell: pwsh
         run: nuget restore packages.config -PackagesDirectory packages
 
-      # The NuGet WDK has the compiler and libraries but not the INF tools (stampinf, inf2cat).
-      # Use them from an installed Windows Kit, installing the WDK first when the runner has none.
-      - name: Locate INF tools (install the WDK if needed)
+      # The WDK tools live inside the NuGet package but are not on PATH.
+      - name: Put the WDK tools on PATH
         shell: pwsh
         run: |
           function Find-Tool([string]$name) {
-            Get-ChildItem -Path "${env:ProgramFiles(x86)}\Windows Kits", (Join-Path $PWD 'packages') -Recurse -Filter $name -ErrorAction SilentlyContinue |
+            Get-ChildItem -Path (Join-Path $PWD 'packages') -Recurse -Filter $name -ErrorAction SilentlyContinue |
               Where-Object { $_.FullName -match '\\(x64|x86)\\' } | Sort-Object FullName -Descending | Select-Object -First 1
           }
-          if (-not (Find-Tool 'stampinf.exe')) {
-            Write-Host 'stampinf.exe not found, installing the WDK...'
-            winget install --id Microsoft.WindowsWDK.10.0.26100 --silent --accept-source-agreements --accept-package-agreements
-          }
-          foreach ($tool in 'stampinf.exe', 'inf2cat.exe', 'infverif.exe') {
+          foreach ($tool in 'stampinf.exe', 'inf2cat.exe', 'infverif.exe', 'signtool.exe') {
             $found = Find-Tool $tool
             if ($found) {
               Write-Host "$tool -> $($found.FullName)"
@@ -52,15 +47,7 @@ jobs:
             }
           }
 
-      - name: Diagnostics (WDK package layout)
-        shell: pwsh
-        continue-on-error: true
-        run: |
-          $targets = Get-ChildItem packages -Recurse -Filter 'WindowsDriver.common.targets' | Select-Object -First 1
-          Write-Host "targets: $($targets.FullName)"
-          Select-String -Path $targets.FullName -Pattern 'InfVerif|ApiValidator' | Select-Object -First 60 | ForEach-Object { Write-Host "$($_.LineNumber): $($_.Line.Trim())" }
-          Get-ChildItem packages -Recurse -Filter 'InfVerif*' | ForEach-Object { Write-Host "found: $($_.FullName)" }
-
+      # ApiValidator.exe and the InfVerif task of the NuGet WDK cannot run on the hosted runner.
       - name: Build
         shell: pwsh
         run: msbuild sysvad/AudioTrackDriver.sln /m /restore:false /p:Configuration=Release /p:Platform=x64 /p:ApiValidator_Enable=false /v:minimal
@@ -69,10 +56,43 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force out | Out-Null
-          Get-ChildItem sysvad/TabletAudioSample -Recurse -Include audiotrackmic.sys,AudioTrackMic.inf,audiotrackmic.cat,audiotrackmic.pdb |
+          Get-ChildItem sysvad/TabletAudioSample -Recurse -Include audiotrackmic.sys,AudioTrackMic.inf,audiotrackmic.pdb |
             ForEach-Object { Copy-Item $_.FullName out/ -Force; Write-Host $_.FullName }
+          Copy-Item ../AudioTrack/resources/driver/install.ps1, ../AudioTrack/resources/driver/uninstall.ps1 out/
+
+      - name: Verify the INF (informational)
+        shell: pwsh
+        continue-on-error: true
+        run: infverif.exe /v /u out/AudioTrackMic.inf
+
+      - name: Catalog and test-sign
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          Inf2Cat.exe /driver:out /os:10_x64 /uselocaltime
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=Audiotrack Test Signing' `
+            -CertStoreLocation Cert:\CurrentUser\My -NotAfter (Get-Date).AddYears(2)
+          Export-Certificate -Cert $cert -FilePath out/AudiotrackTest.cer | Out-Null
+          foreach ($file in 'out/audiotrackmic.sys', 'out/audiotrackmic.cat') {
+            signtool.exe sign /fd SHA256 /sha1 $cert.Thumbprint $file
+          }
+          Set-Content -Path out/TEST-INSTALL.txt -Encoding ASCII -Value @'
+          TEST-SIGNED Audiotrack driver - only for a virtual machine, never for your main PC.
+
+          1. Run an elevated PowerShell on the VM:
+               bcdedit /set testsigning on        (then restart; Secure Boot must be off)
+          2. Trust the test certificate (elevated):
+               certutil -addstore Root AudiotrackTest.cer
+               certutil -addstore TrustedPublisher AudiotrackTest.cer
+          3. Install (elevated), from this folder:
+               powershell -ExecutionPolicy Bypass -File install.ps1 -DriverDir .
+          4. Check Sound settings: "Audiotrack Out" (playback) and "Audiotrack Mic" (recording).
+             Play any sound to Audiotrack Out - it appears on Audiotrack Mic.
+          Remove with uninstall.ps1.
+          '@
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: audiotrack-driver-unsigned
+          name: audiotrack-driver-test-signed
           path: AudioTrackDriver/out
