@@ -142,9 +142,11 @@ bool AudiotrackPopup::init() {
     button(m_buttonMenu, this, menu_selector(AudiotrackPopup::onPreview), "Preview", 50.f, 46.f, 76.f,
            {29, 135, 123});
     button(m_buttonMenu, this, menu_selector(AudiotrackPopup::onStop), "Stop", 132.f, 46.f, 60.f, {40, 50, 74});
-    button(m_buttonMenu, this, menu_selector(AudiotrackPopup::onEnabled), "", 214.f, 46.f, 70.f, {49, 79, 103});
-    m_enabledLabel = label(m_mainLayer, "", 214.f, 46.f, .3f, {255, 255, 255}, 62.f);
-    m_enabledLabel->setZOrder(5);
+    // Toggle buttons carry their text inside the button, a label on the popup would be hidden behind it.
+    NineSlice* enabledBg = nullptr;
+    button(m_buttonMenu, this, menu_selector(AudiotrackPopup::onEnabled), "", 214.f, 46.f, 70.f, {49, 79, 103}, 0,
+           &enabledBg);
+    m_enabledLabel = label(enabledBg, "", 35.f, 12.f, .3f, {255, 255, 255}, 62.f);
     button(m_buttonMenu, this, menu_selector(AudiotrackPopup::onVolume), "-", 280.f, 46.f, 32.f, {40, 50, 74}, -1);
     m_volumeLabel = label(m_mainLayer, "", 318.f, 46.f, .3f, kText, 44.f);
     button(m_buttonMenu, this, menu_selector(AudiotrackPopup::onVolume), "+", 356.f, 46.f, 32.f, {40, 50, 74}, 1);
@@ -152,12 +154,14 @@ bool AudiotrackPopup::init() {
 
     // Microphone cable row.
     m_driverPresent = Mixer::get().cableAvailable();
-    button(m_buttonMenu, this, menu_selector(AudiotrackPopup::onToMic), "", 70.f, 20.f, 108.f, {49, 79, 103});
-    m_toMicLabel = label(m_mainLayer, "", 70.f, 20.f, .3f, kMuted, 100.f);
-    m_toMicLabel->setZOrder(5);
-    button(m_buttonMenu, this, menu_selector(AudiotrackPopup::onLocal), "", 188.f, 20.f, 108.f, {49, 79, 103});
-    m_localLabel = label(m_mainLayer, "", 188.f, 20.f, .3f, kMuted, 100.f);
-    m_localLabel->setZOrder(5);
+    NineSlice* toMicBg = nullptr;
+    NineSlice* localBg = nullptr;
+    button(m_buttonMenu, this, menu_selector(AudiotrackPopup::onToMic), "", 70.f, 20.f, 108.f, {49, 79, 103}, 0,
+           &toMicBg);
+    m_toMicLabel = label(toMicBg, "", 54.f, 12.f, .3f, kMuted, 100.f);
+    button(m_buttonMenu, this, menu_selector(AudiotrackPopup::onLocal), "", 188.f, 20.f, 108.f, {49, 79, 103}, 0,
+           &localBg);
+    m_localLabel = label(localBg, "", 54.f, 12.f, .3f, kMuted, 100.f);
     button(m_buttonMenu, this, menu_selector(AudiotrackPopup::onInstall), "Get VB-Cable", 306.f, 20.f, 100.f,
            {40, 50, 74});
     m_mixerLabel = label(m_mainLayer, "", 446.f, 20.f, .26f, kMuted, 84.f);
