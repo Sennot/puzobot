@@ -14,6 +14,7 @@
 #include "wav.hpp"
 
 #include <atomic>
+#include <functional>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -22,6 +23,15 @@
 #include <vector>
 
 namespace at {
+
+// Result of Mixer::calibrate().
+struct CalibrationResult {
+    bool ok = false;
+    int offsetMs = 0;  // how late the microphone's clicks arrive
+    int pairs = 0;     // clicks that were matched with a sound
+    int spreadMs = 0;  // how much the single measurements differ
+    std::string message;
+};
 
 class Mixer {
 public:
@@ -58,6 +68,13 @@ public:
     // Applies to all voices: game pause and the game's time scale (speedhack).
     void setTransport(bool paused, float rate);
 
+    // Measures how late the real microphone's sounds reach the mixer (a phone microphone such as
+    // WO Mic is slow). For `seconds` the left mouse button and Space are watched; each press is
+    // matched with the first loud sound that follows it in the microphone. The median is the
+    // microphone's delay. `done` runs on the main thread. False if it cannot start.
+    bool calibrate(double seconds, std::function<void(CalibrationResult)> done);
+    bool calibrating() const { return m_calibrating.load(); }
+
 private:
     Mixer() = default;
     ~Mixer();
@@ -75,6 +92,7 @@ private:
     void renderThread();
     void mixInto(float* out, std::uint32_t frames);
     void mixVoices(float* out, std::uint32_t frames);
+    void detectOnsets(float const* in, std::uint32_t frames, double now);
     void setStatus(std::string text);
 
     std::atomic<bool> m_running{false};
@@ -102,6 +120,13 @@ private:
     std::atomic<std::uint64_t> m_micWritten{0};
     std::atomic<std::uint64_t> m_micRead{0};
     bool m_micPrimed = false; // render thread only
+
+    // Calibration: sounds heard in the microphone (capture thread) and their times.
+    std::atomic<bool> m_calibrating{false};
+    std::atomic<float> m_calFloor{0.002f};
+    std::atomic<double> m_calLastOnset{-10.0};
+    std::mutex m_calMutex;
+    std::vector<double> m_onsets;
 
     // Counters for the log line printed every few seconds.
     std::atomic<std::uint64_t> m_statFill{0};      // sum of the queued mic frames at each render call

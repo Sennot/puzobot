@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstring>
 
 using Microsoft::WRL::ComPtr;
@@ -21,6 +22,18 @@ namespace at {
 namespace {
 
 constexpr int kRate = 48000;
+
+// Seconds on a steady clock shared by the mouse poller and the capture thread.
+double nowSeconds() {
+    static LARGE_INTEGER const frequency = [] {
+        LARGE_INTEGER f;
+        QueryPerformanceFrequency(&f);
+        return f;
+    }();
+    LARGE_INTEGER counter;
+    QueryPerformanceCounter(&counter);
+    return static_cast<double>(counter.QuadPart) / static_cast<double>(frequency.QuadPart);
+}
 
 // PKEY_Device_FriendlyName, spelled out so no INITGUID juggling is needed.
 const PROPERTYKEY kFriendlyNameKey = {
@@ -350,6 +363,8 @@ void Mixer::captureThread(std::string micName) {
             DWORD flags = 0;
             if (FAILED(capture->GetBuffer(&data, &frames, &flags, nullptr, nullptr))) break;
             if (flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) ++m_statDiscont;
+            if (m_calibrating && !(flags & AUDCLNT_BUFFERFLAGS_SILENT))
+                detectOnsets(reinterpret_cast<float const*>(data), frames, nowSeconds());
 
             // The packet = the real microphone (or silence) + the click voices, one stream from here on.
             chunk.assign(static_cast<std::size_t>(frames) * 2, 0.f);
@@ -372,6 +387,93 @@ void Mixer::captureThread(std::string micName) {
     }
     client->Stop();
     CloseHandle(event);
+}
+
+// Calibration helper: notes when a loud sound starts in the microphone (1 ms blocks, a floor that
+// follows the background noise, at least 150 ms between two sounds).
+void Mixer::detectOnsets(float const* in, std::uint32_t frames, double now) {
+    constexpr std::uint32_t block = kRate / 1000;
+    for (std::uint32_t i = 0; i < frames; i += block) {
+        float peak = 0.f;
+        auto const end = std::min(frames, i + block);
+        for (auto k = i; k < end; ++k) peak = std::max(peak, std::abs(in[k * 2]));
+        float const floorLevel = m_calFloor.load();
+        bool const loud = peak > std::max(0.02f, floorLevel * 8.f);
+        if (loud) {
+            if (now - m_calLastOnset.load() > 0.15) {
+                m_calLastOnset = now;
+                std::lock_guard lock(m_calMutex);
+                m_onsets.push_back(now);
+            }
+        } else {
+            m_calFloor = floorLevel * 0.995f + peak * 0.005f;
+        }
+    }
+}
+
+bool Mixer::calibrate(double seconds, std::function<void(CalibrationResult)> done) {
+    if (!m_running || !m_captureActive) return false;
+    if (m_calibrating.exchange(true)) return false;
+    {
+        std::lock_guard lock(m_calMutex);
+        m_onsets.clear();
+    }
+    m_calFloor = 0.002f;
+    m_calLastOnset = -10.0;
+
+    std::thread([this, seconds, done = std::move(done)] {
+        // The left mouse button and Space are polled every millisecond, a press = a click to find.
+        std::vector<double> presses;
+        bool wasDown = false;
+        auto const end = nowSeconds() + seconds;
+        while (nowSeconds() < end) {
+            bool const down =
+                (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0 || (GetAsyncKeyState(VK_SPACE) & 0x8000) != 0;
+            if (down && !wasDown) presses.push_back(nowSeconds());
+            wasDown = down;
+            Sleep(1);
+        }
+        m_calibrating = false;
+
+        std::vector<double> onsets;
+        {
+            std::lock_guard lock(m_calMutex);
+            onsets = m_onsets;
+        }
+
+        // Match every press with the first sound that starts within 30 ms before to 1.5 s after it.
+        std::vector<double> delays;
+        std::vector<bool> used(onsets.size(), false);
+        for (double press : presses) {
+            for (std::size_t i = 0; i < onsets.size(); ++i) {
+                if (used[i] || onsets[i] < press - 0.03 || onsets[i] > press + 1.5) continue;
+                used[i] = true;
+                delays.push_back(std::max(0.0, onsets[i] - press) * 1000.0);
+                break;
+            }
+        }
+
+        CalibrationResult result;
+        result.pairs = static_cast<int>(delays.size());
+        if (delays.size() < 4) {
+            result.message = fmt::format(
+                "Calibration failed: only {} of {} clicks were heard in the microphone. Click closer to it or louder.",
+                delays.size(), presses.size());
+        } else {
+            std::sort(delays.begin(), delays.end());
+            // Spread of the middle 70 % so one stray click does not count.
+            auto const lowIndex = delays.size() * 15 / 100;
+            auto const highIndex = std::min(delays.size() - 1, delays.size() * 85 / 100);
+            result.ok = true;
+            result.offsetMs = static_cast<int>(std::lround(delays[delays.size() / 2]));
+            result.spreadMs = static_cast<int>(std::lround(delays[highIndex] - delays[lowIndex]));
+            result.message = fmt::format("Microphone delay {} ms ({} clicks, spread {} ms) - saved as the click delay",
+                                         result.offsetMs, result.pairs, result.spreadMs);
+            if (result.spreadMs > 40) result.message += ". The measurements vary a lot, try again.";
+        }
+        queueInMainThread([done, result] { done(result); });
+    }).detach();
+    return true;
 }
 
 // Adds all click voices to `out` (interleaved stereo float). Called by the capture thread, so the

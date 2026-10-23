@@ -45,6 +45,7 @@ protected:
     void onEnabled(cocos2d::CCObject*);
     void onToMic(cocos2d::CCObject*);
     void onLocal(cocos2d::CCObject*);
+    void onCalibrate(cocos2d::CCObject*);
     void onInstall(cocos2d::CCObject*);
     void onVolume(cocos2d::CCObject*);
     void onSave(cocos2d::CCObject*);

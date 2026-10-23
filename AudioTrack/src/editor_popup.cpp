@@ -163,8 +163,10 @@ bool AudiotrackPopup::init() {
            &localBg);
     m_localLabel = label(localBg, "", 42.f, 12.f, .27f, kMuted, 78.f);
 
-    button(m_buttonMenu, this, menu_selector(AudiotrackPopup::onInstall), "Get VB-Cable", 250.f, 20.f, 116.f,
+    button(m_buttonMenu, this, menu_selector(AudiotrackPopup::onInstall), "VB-Cable", 232.f, 20.f, 80.f,
            {40, 50, 74});
+    button(m_buttonMenu, this, menu_selector(AudiotrackPopup::onCalibrate), "Calibrate", 320.f, 20.f, 80.f,
+           {29, 135, 123});
     m_mixerLabel = label(m_mainLayer, "", 452.f, 20.f, .26f, kMuted, 80.f);
     m_mixerLabel->setAnchorPoint({1.f, .5f});
 
@@ -492,6 +494,19 @@ void AudiotrackPopup::onToMic(CCObject*) {
     }
     m_track.toMic = !m_track.toMic;
     refreshAll();
+}
+
+void AudiotrackPopup::onCalibrate(CCObject*) {
+    // The result is a global setting, so it does not depend on this popup staying open.
+    auto& mixer = Mixer::get();
+    if (!mixer.running()) return setStatus("The mixer is not running (VB-Cable missing?)", true);
+    bool const started = mixer.calibrate(12.0, [](CalibrationResult result) {
+        if (result.ok) Mod::get()->setSettingValue<int64_t>("mic-click-offset", result.offsetMs);
+        Notification::create(result.message, result.ok ? NotificationIcon::Success : NotificationIcon::Warning, 7.f)
+            ->show();
+    });
+    if (!started) return setStatus("Calibration is running already, or the microphone is not active", true);
+    setStatus("Click the left mouse button 10 times close to the microphone, about a second apart (12 s)");
 }
 
 void AudiotrackPopup::onLocal(CCObject*) {
