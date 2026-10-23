@@ -45,6 +45,7 @@ protected:
     void onEnabled(cocos2d::CCObject*);
     void onToMic(cocos2d::CCObject*);
     void onLocal(cocos2d::CCObject*);
+    void onAdvance(cocos2d::CCObject*);
     void onInstall(cocos2d::CCObject*);
     void onVolume(cocos2d::CCObject*);
     void onSave(cocos2d::CCObject*);
@@ -83,6 +84,7 @@ protected:
     cocos2d::CCLabelBMFont* m_toMicLabel = nullptr;
     cocos2d::CCLabelBMFont* m_localLabel = nullptr;
     cocos2d::CCLabelBMFont* m_mixerLabel = nullptr;
+    cocos2d::CCLabelBMFont* m_advanceLabel = nullptr;
     bool m_driverPresent = false; // "Audiotrack Out/Mic" exist, checked when the editor opens
     geode::NineSlice* m_markerButtons[3] = {nullptr, nullptr, nullptr};
 

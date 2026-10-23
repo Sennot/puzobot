@@ -100,6 +100,13 @@ private:
     std::atomic<std::uint64_t> m_micWritten{0};
     std::atomic<std::uint64_t> m_micRead{0};
     bool m_micPrimed = false; // render thread only
+
+    // Counters for the log line printed every few seconds.
+    std::atomic<std::uint64_t> m_statFill{0};      // sum of the queued mic frames at each render call
+    std::atomic<std::uint64_t> m_statCalls{0};
+    std::atomic<std::uint64_t> m_statUnderruns{0}; // render wanted more mic audio than was queued
+    std::atomic<std::uint64_t> m_statTrims{0};     // queue grew too long and was cut down
+    std::atomic<std::uint64_t> m_statDiscont{0};   // capture device reported a glitch
 };
 
 } // namespace at

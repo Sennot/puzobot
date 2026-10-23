@@ -38,6 +38,8 @@ public:
     // Replaces the track of the current macro and saves it.
     void assign(Track track);
 
+    // Loads the track ahead of time, e.g. while a level is loading.
+    void preload();
     // PlayLayer::resetLevel, after xdBot's own reset logic.
     void onReset();
     // Every scheduler tick (raw dt).

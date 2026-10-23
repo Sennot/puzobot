@@ -32,6 +32,12 @@ class $modify(AtPlayLayer, PlayLayer) {
         (void)self.setHookPriorityBefore("PlayLayer::resetLevel", "zilko.xdbot");
     }
 
+    bool init(GJGameLevel* level, bool useReplay, bool dontCreateObjects) {
+        if (!PlayLayer::init(level, useReplay, dontCreateObjects)) return false;
+        at::Playback::get().preload(); // the level is loading anyway, a hitch here is invisible
+        return true;
+    }
+
     void resetLevel() {
         PlayLayer::resetLevel();
         at::Playback::get().onReset();

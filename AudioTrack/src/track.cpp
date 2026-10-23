@@ -33,6 +33,7 @@ std::optional<Track> loadTrack(std::uint64_t fingerprint) {
     track.wavPath = value["wav"].asString().unwrapOr("");
     track.anchorSeconds = value["anchor"].asDouble().unwrapOr(0.0);
     track.audioEndSeconds = value["audio_end"].asDouble().unwrapOr(0.0);
+    track.micAdvanceMs = static_cast<int>(value["mic_advance_ms"].asDouble().unwrapOr(0.0));
     track.macroEndFrame = static_cast<std::int64_t>(value["macro_end_frame"].asDouble().unwrapOr(-1.0));
     track.volume = static_cast<float>(value["volume"].asDouble().unwrapOr(1.0));
     track.enabled = value["enabled"].asBool().unwrapOr(true);
@@ -50,6 +51,7 @@ bool saveTrack(std::uint64_t fingerprint, Track const& track) {
     value["wav"] = track.wavPath;
     value["anchor"] = track.anchorSeconds;
     value["audio_end"] = track.audioEndSeconds;
+    value["mic_advance_ms"] = static_cast<double>(track.micAdvanceMs);
     value["macro_end_frame"] = static_cast<double>(track.macroEndFrame);
     value["volume"] = static_cast<double>(track.volume);
     value["enabled"] = track.enabled;

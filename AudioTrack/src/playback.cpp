@@ -3,6 +3,8 @@
 #include <Geode/Geode.hpp>
 
 #include <algorithm>
+#include <chrono>
+#include <thread>
 
 using namespace geode::prelude;
 
@@ -64,30 +66,64 @@ bool Playback::load(std::string const& path) {
 }
 
 bool Playback::begin(double seconds, double delay) {
+    // Everything that follows may take a while on the first start of a track (loading and decoding
+    // the wav). The clock already runs, so the time spent is skipped in the wav instead of being
+    // heard as clicks that come late.
+    auto const started = std::chrono::steady_clock::now();
+
     auto const* track = current();
     if (!track || !load(track->wavPath)) return false;
     auto* engine = FMODAudioEngine::sharedEngine();
+    bool const toMic = track->toMic && Mixer::get().running();
+    if (toMic) {
+        std::string error;
+        Mixer::get().prepare(track->wavPath, error); // decode now, before the late time is measured
+    }
 
     // Keep the preview flag across the stop below.
     bool const preview = m_preview;
     stopCurrent();
     m_preview = preview;
 
-    m_delay = delay;
-    if (delay > 0.0) return true; // tick() starts the sound once the delay is over
+    double const late = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+    double const remaining = delay - late;
+    if (remaining > 0.0) {
+        m_delay = remaining; // tick() starts the sound once the delay is over
+        return true;
+    }
+    // The wav starts at `seconds`, or at its beginning after a delay, plus whatever time was lost.
+    double const position = (delay > 0.0 ? 0.0 : seconds) + std::max(0.0, late - delay);
 
     FMOD::Channel* channel = nullptr;
     if (engine->m_system->playSound(m_sound, nullptr, true, &channel) != FMOD_OK || !channel) return false;
-    channel->setPosition(static_cast<unsigned int>(std::max(0.0, seconds) * m_frequency), FMOD_TIMEUNIT_PCM);
+    channel->setPosition(static_cast<unsigned int>(std::max(0.0, position) * m_frequency), FMOD_TIMEUNIT_PCM);
     // With "in game" off the channel still runs (it is the clock) but is silent.
     channel->setVolume(track->local ? track->volume : 0.f);
     channel->setPitch(preview ? 1.f : CCDirector::get()->getScheduler()->getTimeScale());
     channel->setPaused(false);
     m_channel = channel;
 
-    if (track->toMic && Mixer::get().running())
-        m_mixVoice = Mixer::get().play(track->wavPath, seconds, track->volume, track->audioEndSeconds);
+    // The microphone path is slower than the game, so its copy starts earlier in the wav.
+    if (toMic)
+        m_mixVoice = Mixer::get().play(track->wavPath, position + track->micAdvanceMs / 1000.0, track->volume,
+                                       track->audioEndSeconds);
     return true;
+}
+
+// Loads the wav ahead of time (FMOD and the mixer's decoded copy) so the first attempt does not stall.
+void Playback::preload() {
+    auto& api = XdBotApi::get();
+    if (!api.attach()) return;
+    refresh();
+    if (!m_track || !m_track->enabled || m_track->wavPath.empty()) return;
+    load(m_track->wavPath);
+    if (m_track->toMic && Mixer::get().running()) {
+        std::string path = m_track->wavPath;
+        std::thread([path] {
+            std::string error;
+            Mixer::get().prepare(path, error);
+        }).detach();
+    }
 }
 
 void Playback::stopCurrent() {
@@ -212,7 +248,7 @@ void Playback::tick(float dt) {
     if (!m_channel) {
         if (paused) return;
         m_delay -= dt * CCDirector::get()->getScheduler()->getTimeScale();
-        if (m_delay <= 0.0) begin(0.0, 0.0);
+        if (m_delay <= 0.0) begin(-m_delay, 0.0); // the delay ended somewhere inside this tick
         return;
     }
 

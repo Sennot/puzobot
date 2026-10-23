@@ -260,7 +260,8 @@ Mixer::VoiceId Mixer::play(std::string const& wavUtf8, double fromSeconds, float
     voice.id = m_nextId++;
     voice.clip = m_clip;
     auto const total = static_cast<double>(voice.clip->frames());
-    voice.position = std::max(0.0, fromSeconds) * kRate;
+    // A negative start is allowed: the voice stays silent until the position reaches the wav.
+    voice.position = fromSeconds * kRate;
     voice.endFrame = endSeconds > 0.0 ? std::min(total, endSeconds * kRate) : total;
     voice.volume = volume;
     if (m_voices.size() >= 8) m_voices.erase(m_voices.begin());
@@ -323,6 +324,11 @@ void Mixer::captureThread(std::string micName) {
         CloseHandle(event);
         return;
     }
+    {
+        REFERENCE_TIME latency = 0;
+        if (SUCCEEDED(client->GetStreamLatency(&latency)))
+            log::info("Audiotrack mixer: microphone stream latency {:.1f} ms", latency / 10000.0);
+    }
 
     while (!m_stopRequested) {
         if (WaitForSingleObject(event, 100) == WAIT_FAILED) break;
@@ -332,6 +338,7 @@ void Mixer::captureThread(std::string micName) {
             UINT32 frames = 0;
             DWORD flags = 0;
             if (FAILED(capture->GetBuffer(&data, &frames, &flags, nullptr, nullptr))) break;
+            if (flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) ++m_statDiscont;
 
             auto const written = m_micWritten.load(std::memory_order_relaxed);
             auto const read = m_micRead.load(std::memory_order_acquire);
@@ -355,15 +362,18 @@ void Mixer::captureThread(std::string micName) {
 void Mixer::mixInto(float* out, std::uint32_t frames) {
     std::memset(out, 0, static_cast<std::size_t>(frames) * 2 * sizeof(float));
 
-    // Real microphone: prime for 20 ms, keep at most 100 ms queued (jump to 40 ms).
+    // Real microphone: prime for 15 ms, keep at most 60 ms queued (cut down to 25 ms).
     auto const written = m_micWritten.load(std::memory_order_acquire);
     auto read = m_micRead.load(std::memory_order_relaxed);
     std::uint64_t available = written - read;
-    if (!m_micPrimed && available >= kRate / 50) m_micPrimed = true;
+    m_statFill += available;
+    ++m_statCalls;
+    if (!m_micPrimed && available >= kRate * 3 / 200) m_micPrimed = true;
     if (m_micPrimed) {
-        if (available > kRate / 10) {
-            read = written - kRate / 25;
-            available = kRate / 25;
+        if (available > kRate * 3 / 50) {
+            read = written - kRate / 40;
+            available = kRate / 40;
+            ++m_statTrims;
         }
         auto const take = static_cast<std::uint32_t>(std::min<std::uint64_t>(available, frames));
         for (std::uint32_t i = 0; i < take; ++i) {
@@ -372,7 +382,10 @@ void Mixer::mixInto(float* out, std::uint32_t frames) {
             out[i * 2 + 1] = m_micRing[slot + 1];
         }
         m_micRead.store(read + take, std::memory_order_release);
-        if (take < frames) m_micPrimed = false; // underrun: wait for the queue to refill
+        if (take < frames) {
+            m_micPrimed = false; // underrun: wait for the queue to refill
+            ++m_statUnderruns;
+        }
     }
 
     // Click voices.
@@ -385,6 +398,10 @@ void Mixer::mixInto(float* out, std::uint32_t frames) {
             auto const total = voice.clip->frames();
             bool finished = false;
             for (std::uint32_t f = 0; f < frames; ++f) {
+                if (voice.position < 0.0) { // not started yet
+                    voice.position += rate;
+                    continue;
+                }
                 if (voice.position >= voice.endFrame || static_cast<std::size_t>(voice.position) + 1 >= total) {
                     finished = true;
                     break;
@@ -441,7 +458,13 @@ void Mixer::renderThread() {
         return;
     }
     setStatus("running");
+    {
+        REFERENCE_TIME latency = 0;
+        if (SUCCEEDED(client->GetStreamLatency(&latency)))
+            log::info("Audiotrack mixer: cable output stream latency {:.1f} ms", latency / 10000.0);
+    }
     log::info("Audiotrack mixer: running");
+    ULONGLONG lastReport = GetTickCount64();
 
     while (!m_stopRequested) {
         if (WaitForSingleObject(event, 100) == WAIT_FAILED) break;
@@ -453,6 +476,18 @@ void Mixer::renderThread() {
         if (FAILED(render->GetBuffer(frames, &data))) break;
         mixInto(reinterpret_cast<float*>(data), frames);
         render->ReleaseBuffer(frames, 0);
+
+        if (GetTickCount64() - lastReport >= 5000) {
+            lastReport = GetTickCount64();
+            auto const calls = m_statCalls.exchange(0);
+            auto const fill = m_statFill.exchange(0);
+            auto const underruns = m_statUnderruns.exchange(0);
+            auto const trims = m_statTrims.exchange(0);
+            auto const glitches = m_statDiscont.exchange(0);
+            if (calls > 0 && m_micWritten.load() > 0)
+                log::info("Audiotrack mixer: mic queue avg {:.1f} ms, underruns {}, trims {}, capture glitches {}",
+                          static_cast<double>(fill) / static_cast<double>(calls) * 1000.0 / kRate, underruns, trims, glitches);
+        }
     }
     client->Stop();
     CloseHandle(event);
