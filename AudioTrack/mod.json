@@ -25,6 +25,14 @@
 			"type": "string",
 			"default": "CABLE Input"
 		},
+		"mic-click-offset": {
+			"name": "Click delay in the microphone (ms)",
+			"description": "Delays the Audiotrack clicks that go into the microphone cable by this many milliseconds, so they line up with your own clicks that reach the cable late through a slow microphone (WO Mic over Wi-Fi, Bluetooth). Negative plays them earlier. It does not affect the in-game sound. Set it once.",
+			"type": "int",
+			"default": 0,
+			"min": -500,
+			"max": 1500
+		},
 		"start-mixer": {
 			"name": "Start the mixer with the game",
 			"description": "Starts the mixer when the game launches (if a virtual cable is installed), so the cable carries your voice as long as GD is open.",

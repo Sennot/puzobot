@@ -260,8 +260,12 @@ Mixer::VoiceId Mixer::play(std::string const& wavUtf8, double fromSeconds, float
     voice.id = m_nextId++;
     voice.clip = m_clip;
     auto const total = static_cast<double>(voice.clip->frames());
-    // A negative start is allowed: the voice stays silent until the position reaches the wav.
-    voice.position = fromSeconds * kRate;
+    // One static offset for everything that goes through the microphone cable (setting
+    // "mic-click-offset"): delays the clicks by this many ms (negative = earlier), e.g. to match a
+    // microphone with a long delay. A start before the wav is allowed, the voice stays silent until
+    // the position reaches it.
+    double const offsetMs = static_cast<double>(Mod::get()->getSettingValue<int64_t>("mic-click-offset"));
+    voice.position = (fromSeconds - offsetMs / 1000.0) * kRate;
     voice.endFrame = endSeconds > 0.0 ? std::min(total, endSeconds * kRate) : total;
     voice.volume = volume;
     if (m_voices.size() >= 8) m_voices.erase(m_voices.begin());
