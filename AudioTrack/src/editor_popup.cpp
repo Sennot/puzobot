@@ -163,14 +163,9 @@ bool AudiotrackPopup::init() {
            &localBg);
     m_localLabel = label(localBg, "", 42.f, 12.f, .27f, kMuted, 78.f);
 
-    // Mic advance: the microphone path is slower than the game, so its clicks are played earlier.
-    button(m_buttonMenu, this, menu_selector(AudiotrackPopup::onAdvance), "-", 196.f, 20.f, 26.f, {40, 50, 74}, -5);
-    m_advanceLabel = label(m_mainLayer, "", 238.f, 20.f, .26f, kText, 56.f);
-    button(m_buttonMenu, this, menu_selector(AudiotrackPopup::onAdvance), "+", 280.f, 20.f, 26.f, {40, 50, 74}, 5);
-
-    button(m_buttonMenu, this, menu_selector(AudiotrackPopup::onInstall), "VB-Cable", 340.f, 20.f, 80.f,
+    button(m_buttonMenu, this, menu_selector(AudiotrackPopup::onInstall), "Get VB-Cable", 250.f, 20.f, 116.f,
            {40, 50, 74});
-    m_mixerLabel = label(m_mainLayer, "", 452.f, 20.f, .24f, kMuted, 62.f);
+    m_mixerLabel = label(m_mainLayer, "", 452.f, 20.f, .26f, kMuted, 80.f);
     m_mixerLabel->setAnchorPoint({1.f, .5f});
 
     if (!m_track.wavPath.empty()) {
@@ -304,9 +299,7 @@ void AudiotrackPopup::refreshAll() {
     else if (m_driverPresent) mixer = Mixer::get().status();
     m_mixerLabel->setString(mixer.c_str());
     m_mixerLabel->setColor(Mixer::get().running() ? kMint : kMuted);
-    m_mixerLabel->limitLabelWidth(62.f, .24f, .1f);
-    m_advanceLabel->setString(fmt::format("Mic {:+} ms", -m_track.micAdvanceMs).c_str());
-    m_advanceLabel->setColor(m_track.toMic ? kText : kMuted);
+    m_mixerLabel->limitLabelWidth(80.f, .26f, .1f);
 
     Playback::get().updatePreview(m_track);
     redraw();
@@ -498,17 +491,6 @@ void AudiotrackPopup::onToMic(CCObject*) {
         }
     }
     m_track.toMic = !m_track.toMic;
-    refreshAll();
-}
-
-void AudiotrackPopup::onAdvance(CCObject* sender) {
-    // "-" brings the microphone clicks forward (earlier), "+" pushes them later. Shown as the delay.
-    m_track.micAdvanceMs = std::clamp(m_track.micAdvanceMs - static_cast<CCNode*>(sender)->getTag(), -500, 1500);
-    setStatus(m_track.micAdvanceMs > 0
-                  ? fmt::format("Microphone clicks play {} ms earlier than the wav says", m_track.micAdvanceMs)
-                  : m_track.micAdvanceMs < 0
-                        ? fmt::format("Microphone clicks play {} ms later than the wav says", -m_track.micAdvanceMs)
-                        : std::string("Microphone clicks are not shifted"));
     refreshAll();
 }
 

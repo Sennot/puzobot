@@ -21,9 +21,6 @@ struct Track {
     std::int64_t macroEndFrame = -1;
     float volume = 1.0f;
     bool enabled = true;
-    // The microphone path (mixer, cable, OBS) delays the clicks. This plays them that many
-    // milliseconds earlier in the cable only; the in-game sound is not touched.
-    int micAdvanceMs = 0;
     // Send the wave into the virtual microphone cable (mixed with the real microphone).
     bool toMic = false;
     // Play it inside the game as well (FMOD). Off = silent in the game, mic only.

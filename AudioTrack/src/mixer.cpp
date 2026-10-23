@@ -330,6 +330,13 @@ void Mixer::captureThread(std::string micName) {
             log::info("Audiotrack mixer: microphone stream latency {:.1f} ms", latency / 10000.0);
     }
 
+    m_captureActive = true;
+    struct ActiveGuard {
+        std::atomic<bool>& flag;
+        ~ActiveGuard() { flag = false; }
+    } activeGuard{m_captureActive};
+    std::vector<float> chunk;
+
     while (!m_stopRequested) {
         if (WaitForSingleObject(event, 100) == WAIT_FAILED) break;
         UINT32 packet = 0;
@@ -340,15 +347,19 @@ void Mixer::captureThread(std::string micName) {
             if (FAILED(capture->GetBuffer(&data, &frames, &flags, nullptr, nullptr))) break;
             if (flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) ++m_statDiscont;
 
+            // The packet = the real microphone (or silence) + the click voices, one stream from here on.
+            chunk.assign(static_cast<std::size_t>(frames) * 2, 0.f);
+            if (m_passthrough && !(flags & AUDCLNT_BUFFERFLAGS_SILENT))
+                std::memcpy(chunk.data(), data, static_cast<std::size_t>(frames) * 2 * sizeof(float));
+            mixVoices(chunk.data(), frames);
+
             auto const written = m_micWritten.load(std::memory_order_relaxed);
             auto const read = m_micRead.load(std::memory_order_acquire);
-            if (m_passthrough && written - read + frames <= kMicRingFrames) {
-                auto const* in = reinterpret_cast<float const*>(data);
-                bool const silent = (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0;
+            if (written - read + frames <= kMicRingFrames) {
                 for (UINT32 i = 0; i < frames; ++i) {
                     auto const slot = static_cast<std::size_t>((written + i) % kMicRingFrames) * 2;
-                    m_micRing[slot] = silent ? 0.f : in[i * 2];
-                    m_micRing[slot + 1] = silent ? 0.f : in[i * 2 + 1];
+                    m_micRing[slot] = chunk[i * 2];
+                    m_micRing[slot + 1] = chunk[i * 2 + 1];
                 }
                 m_micWritten.store(written + frames, std::memory_order_release);
             }
@@ -357,6 +368,41 @@ void Mixer::captureThread(std::string micName) {
     }
     client->Stop();
     CloseHandle(event);
+}
+
+// Adds all click voices to `out` (interleaved stereo float). Called by the capture thread, so the
+// clicks travel through the same queue as the microphone and share its delay.
+void Mixer::mixVoices(float* out, std::uint32_t frames) {
+    if (!m_paused) {
+        double const rate = m_rate;
+        std::lock_guard lock(m_mutex);
+        for (auto it = m_voices.begin(); it != m_voices.end();) {
+            auto& voice = *it;
+            auto const* samples = voice.clip->samples.data();
+            auto const total = voice.clip->frames();
+            bool finished = false;
+            for (std::uint32_t f = 0; f < frames; ++f) {
+                if (voice.position < 0.0) { // not started yet
+                    voice.position += rate;
+                    continue;
+                }
+                if (voice.position >= voice.endFrame || static_cast<std::size_t>(voice.position) + 1 >= total) {
+                    finished = true;
+                    break;
+                }
+                auto const i0 = static_cast<std::size_t>(voice.position);
+                auto const t = static_cast<float>(voice.position - static_cast<double>(i0));
+                for (int c = 0; c < 2; ++c) {
+                    float const a = samples[i0 * 2 + c];
+                    float const b = samples[(i0 + 1) * 2 + c];
+                    out[f * 2 + c] += (a + (b - a) * t) * voice.volume;
+                }
+                voice.position += rate;
+            }
+            it = finished ? m_voices.erase(it) : it + 1;
+        }
+    }
+
 }
 
 void Mixer::mixInto(float* out, std::uint32_t frames) {
@@ -388,36 +434,9 @@ void Mixer::mixInto(float* out, std::uint32_t frames) {
         }
     }
 
-    // Click voices.
-    if (!m_paused) {
-        double const rate = m_rate;
-        std::lock_guard lock(m_mutex);
-        for (auto it = m_voices.begin(); it != m_voices.end();) {
-            auto& voice = *it;
-            auto const* samples = voice.clip->samples.data();
-            auto const total = voice.clip->frames();
-            bool finished = false;
-            for (std::uint32_t f = 0; f < frames; ++f) {
-                if (voice.position < 0.0) { // not started yet
-                    voice.position += rate;
-                    continue;
-                }
-                if (voice.position >= voice.endFrame || static_cast<std::size_t>(voice.position) + 1 >= total) {
-                    finished = true;
-                    break;
-                }
-                auto const i0 = static_cast<std::size_t>(voice.position);
-                auto const t = static_cast<float>(voice.position - static_cast<double>(i0));
-                for (int c = 0; c < 2; ++c) {
-                    float const a = samples[i0 * 2 + c];
-                    float const b = samples[(i0 + 1) * 2 + c];
-                    out[f * 2 + c] += (a + (b - a) * t) * voice.volume;
-                }
-                voice.position += rate;
-            }
-            it = finished ? m_voices.erase(it) : it + 1;
-        }
-    }
+    // Normally the clicks were already mixed into the microphone stream by the capture thread.
+    // Without a capture (no microphone) the render side adds them itself.
+    if (!m_captureActive) mixVoices(out, frames);
 
     for (std::uint32_t i = 0; i < frames * 2; ++i) out[i] = std::clamp(out[i], -1.f, 1.f);
 }

@@ -103,10 +103,8 @@ bool Playback::begin(double seconds, double delay) {
     channel->setPaused(false);
     m_channel = channel;
 
-    // The microphone path is slower than the game, so its copy starts earlier in the wav.
-    if (toMic)
-        m_mixVoice = Mixer::get().play(track->wavPath, position + track->micAdvanceMs / 1000.0, track->volume,
-                                       track->audioEndSeconds);
+    // The same wave goes into the microphone stream, from the same position.
+    if (toMic) m_mixVoice = Mixer::get().play(track->wavPath, position, track->volume, track->audioEndSeconds);
     return true;
 }
 

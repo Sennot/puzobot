@@ -74,10 +74,12 @@ private:
     void captureThread(std::string micName);
     void renderThread();
     void mixInto(float* out, std::uint32_t frames);
+    void mixVoices(float* out, std::uint32_t frames);
     void setStatus(std::string text);
 
     std::atomic<bool> m_running{false};
     std::atomic<bool> m_stopRequested{false};
+    std::atomic<bool> m_captureActive{false}; // the capture thread feeds the stream (and mixes the clicks into it)
     std::atomic<bool> m_passthrough{true};
     std::atomic<bool> m_paused{false};
     std::atomic<float> m_rate{1.f};
